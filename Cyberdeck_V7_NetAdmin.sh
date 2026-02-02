@@ -1,166 +1,221 @@
 #!/bin/bash
 
-# --- 1. CONFIGURACIÓN VISUAL (NO TOCAR) ---
+# =================================================================
+#  CYBERDECK V14 - GOLDEN MASTER
+# =================================================================
+
+# --- 1. CONFIGURACIÓN VISUAL ---
 export TERM=linux
 export NCURSES_NO_UTF8_ACS=1
 export SDL_VIDEO_CENTERED=1
 export SDL_VIDEO_KMSDRM_SCALING=0
+export SDL_VIDEO_MINIMIZE_ON_FOCUS_LOSS=0
 
-# Directorio donde guardaremos los backups que traigas de otros PCs
+# Directorio de backups
 BACKUP_DIR="/roms/backups"
 mkdir -p "$BACKUP_DIR"
 
 # --- 2. FUNCIONES DE SISTEMA ---
 
-prepare_screen() {
-    # Forzar resolución
+force_resolution() {
+    stty sane 2>/dev/null
     if command -v fbset >/dev/null 2>&1; then
         fbset -g 640 480 640 480 32 > /dev/null 2>&1
+        fbset -a -g 640 480 640 480 32 > /dev/null 2>&1
     fi
     clear >&2
 }
 
 get_input() {
     prompt="$1"
-    prepare_screen
+    force_resolution
     osk "$prompt" | tail -n 1
 }
 
-# NUEVA FUNCIÓN: Ejecuta en terminal real (pantalla negra) para ver progreso
-run_terminal() {
+run_tui() {
     cmd="$1"
-    prepare_screen
-    echo "------------------------------------------------"
-    echo " EJECUTANDO TAREA EN TIEMPO REAL..."
-    echo "------------------------------------------------"
-    echo ""
-    # Ejecutamos el comando y mostramos todo en pantalla
+    force_resolution
     eval "$cmd"
-    echo ""
-    echo "------------------------------------------------"
-    echo " TAREA FINALIZADA."
-    echo " Pulsa cualquier boton (o START) para volver."
-    read -n 1 -s -r
+    force_resolution
 }
 
-show_result() {
-    prepare_screen
+run_terminal() {
+    cmd="$1"
+    force_resolution
+    echo ">> EJECUTANDO: $cmd"
+    echo "------------------------------------------------"
+    eval "$cmd"
+    echo "------------------------------------------------"
+    echo " [PULSA 'A' o 'START' PARA VOLVER]"
+    read -r
+    force_resolution
+}
+
+show_msg() {
+    force_resolution
     msgbox "$1"
+}
+
+clean_input() {
+    echo "$1" | sed 's/\x1b\[[0-9;]*[a-zA-Z]//g' | tr -cd '0-9'
 }
 
 # --- 3. SUBMENÚS ---
 
-network_tools() {
+menu_network() {
     while true; do
-        raw_choice=$(get_input "RED: 1-Ping 2-Speed 3-iperf 4-WiFi")
-        if [ -z "$raw_choice" ]; then return; fi
+        raw=$(get_input "RED: 1-Ping 2-Wavemon 3-Speed 4-iperf 5-Atras")
+        [ -z "$raw" ] && return
+        sel=$(clean_input "$raw"); sel=${sel: -1}
 
-        # Limpieza V6 (La que funcionó)
-        clean_choice=$(echo "$raw_choice" | sed 's/\x1b\[[0-9;]*[a-zA-Z]//g' | tr -cd '0-9')
-        final_choice=${clean_choice: -1}
-
-        case "$final_choice" in
+        case "$sel" in
             1) 
-               host=$(get_input "Escribe Host (ej: google.com)")
+               host=$(get_input "Host:")
                [ -z "$host" ] && continue
                host=$(echo "$host" | sed 's/\x1b\[[0-9;]*[a-zA-Z]//g' | tr -d '[:cntrl:]')
-               
-               # AHORA USAMOS run_terminal PARA VERLO EN VIVO
                run_terminal "ping -c 5 $host" ;;
             2) 
-               # Speedtest tarda, así que mejor ver que está vivo
-               run_terminal "speedtest-cli --simple" ;;
-            3) 
-               # Instrucciones previas para iperf3
-               prepare_screen
-               msgbox "INSTRUCCIONES SERVIDOR:\n\nEn el otro PC, debes ejecutar:\n'iperf3 -s'\n\nPulsa OK cuando el otro PC este listo."
-               
-               server=$(get_input "IP del Servidor iperf3")
-               [ -z "$server" ] && continue
-               server=$(echo "$server" | sed 's/\x1b\[[0-9;]*[a-zA-Z]//g')
-               
-               run_terminal "iperf3 -c $server -t 5" ;;
+               if command -v wavemon >/dev/null; then
+                   run_tui "wavemon"
+               else
+                   show_msg "Falta 'wavemon'."
+               fi ;;
+            3) run_terminal "speedtest-cli --simple" ;;
             4) 
-               run_terminal "iwlist wlan0 scan | grep -E 'ESSID|Signal'" ;;
-            *) 
-               show_result "Error. Opcion no valida." ;;
+               srv=$(get_input "IP Servidor:")
+               [ -z "$srv" ] && continue
+               run_terminal "iperf3 -c $srv -t 5" ;;
+            5) return ;;
+            *) ;;
         esac
     done
 }
 
-# NUEVO MÓDULO: AUDITORÍA Y BACKUP
-remote_admin() {
-    # 1. Conexión
-    raw_host=$(get_input "IP del Equipo Linux Remoto")
-    [ -z "$raw_host" ] && return 
-    host=$(echo "$raw_host" | sed 's/\x1b\[[0-9;]*[a-zA-Z]//g' | tr -d '[:cntrl:]')
+menu_system() {
+    while true; do
+        raw=$(get_input "1-Htop 2-MC 3-Shell 4-Disk 5-Mtrx 6-Info")
+        [ -z "$raw" ] && return
+        sel=$(clean_input "$raw"); sel=${sel: -1}
 
-    raw_user=$(get_input "Usuario SSH Remoto")
-    [ -z "$raw_user" ] && return
-    user=$(echo "$raw_user" | sed 's/\x1b\[[0-9;]*[a-zA-Z]//g' | tr -d '[:cntrl:]')
+        case "$sel" in
+            1) run_tui "htop" ;;
+            2) 
+               if command -v mc >/dev/null; then
+                   run_tui "mc"
+               else
+                   show_msg "Falta 'mc'."
+               fi ;;
+            3) 
+               while true; do
+                   cmd_raw=$(get_input "SHELL > Comando (exit para salir):")
+                   cmd=$(echo "$cmd_raw" | sed 's/\x1b\[[0-9;]*[a-zA-Z]//g')
+                   if [ -z "$cmd" ] || [ "$cmd" == "exit" ]; then break; fi
+                   run_terminal "$cmd"
+               done
+               ;;
+            4) 
+               if command -v ncdu >/dev/null; then
+                   run_tui "ncdu /"
+               else
+                   run_terminal "df -h"
+               fi ;;
+            5) 
+               if command -v cmatrix >/dev/null; then
+                   run_tui "cmatrix -b -s"
+               else
+                   show_msg "Falta 'cmatrix'."
+               fi ;;
+            6) run_terminal "neofetch" ;;
+            *) ;;
+        esac
+    done
+}
 
-    raw_pass=$(get_input "Contraseña SSH")
-    [ -z "$raw_pass" ] && return
-    pass=$(echo "$raw_pass" | sed 's/\x1b\[[0-9;]*[a-zA-Z]//g')
-    
-    msgbox "Conectando a $host..."
-    
-    if sshpass -p "$pass" ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 "$user"@"$host" "echo OK" 2>&1 | grep -q "OK"; then
-        show_result "¡CONECTADO! Accediendo al sistema..."
-    else
-        show_result "Error al conectar. Verifica IP."
+menu_admin() {
+    rh=$(get_input "IP Remota:")
+    [ -z "$rh" ] && return
+    rh=$(echo "$rh" | sed 's/\x1b\[[0-9;]*[a-zA-Z]//g' | tr -d '[:cntrl:]')
+
+    ru=$(get_input "Usuario SSH:")
+    [ -z "$ru" ] && return
+    ru=$(echo "$ru" | sed 's/\x1b\[[0-9;]*[a-zA-Z]//g' | tr -d '[:cntrl:]')
+
+    rp=$(get_input "Password:")
+    [ -z "$rp" ] && return
+    rp=$(echo "$rp" | sed 's/\x1b\[[0-9;]*[a-zA-Z]//g')
+
+    force_resolution
+    msgbox "Conectando..."
+    if ! sshpass -p "$rp" ssh -o StrictHostKeyChecking=no -o ConnectTimeout=4 "$ru"@"$rh" "echo OK" 2>&1 | grep -q "OK"; then
+        show_msg "Error de Conexion."
         return
     fi
-    
-    while true; do
-        # Menú de administración
-        raw_action=$(get_input "ADMIN: 1-Discos 2-Top 3-Backup 4-Salir")
-        if [ -z "$raw_action" ]; then return; fi
-        
-        clean_action=$(echo "$raw_action" | sed 's/\x1b\[[0-9;]*[a-zA-Z]//g' | tr -cd '0-9')
-        final_action=${clean_action: -1}
 
-        case "$final_action" in
-            1) 
-               # Análisis de disco remoto (df -h)
-               run_terminal "sshpass -p '$pass' ssh $user@$host 'echo [DISCOS]; df -h; echo; echo [MEMORIA]; free -m'" ;;
+    while true; do
+        raw=$(get_input "ADMIN: 1-Htop 2-Backup 3-Shell 4-Atras")
+        [ -z "$raw" ] && return
+        sel=$(clean_input "$raw"); sel=${sel: -1}
+
+        case "$sel" in
+            1) run_tui "sshpass -p '$rp' ssh -t $ru@$rh 'htop'" ;;
             2) 
-               # Procesos remotos
-               run_terminal "sshpass -p '$pass' ssh $user@$host 'top -b -n1 | head -n 15'" ;;
-            3) 
-               # HERRAMIENTA DE BACKUP
-               remote_path=$(get_input "Ruta remota a copiar (ej: /etc)")
-               [ -z "$remote_path" ] && continue
-               remote_path=$(echo "$remote_path" | sed 's/\x1b\[[0-9;]*[a-zA-Z]//g')
-               
-               msgbox "Se va a copiar:\n$host:$remote_path\n\nA tu tarjeta SD:\n$BACKUP_DIR\n\n(Esto puede tardar)"
-               
-               # Comando RSYNC (Copia inteligente)
-               run_terminal "rsync -avz -e 'sshpass -p $pass ssh' $user@$host:$remote_path $BACKUP_DIR" 
-               
-               msgbox "Backup finalizado. Revisa /roms/backups" ;;
+               rpath=$(get_input "Ruta a copiar:")
+               [ -z "$rpath" ] && continue
+               rpath=$(echo "$rpath" | sed 's/\x1b\[[0-9;]*[a-zA-Z]//g')
+               run_terminal "rsync -avzP -e 'sshpass -p $rp ssh' $ru@$rh:$rpath $BACKUP_DIR" ;;
+            3) run_tui "sshpass -p '$rp' ssh $ru@$rh" ;;
             4) return ;;
-            *) show_result "Opcion invalida." ;;
         esac
     done
 }
 
-# --- 4. BUCLE PRINCIPAL ---
-while true; do
-    raw_main=$(get_input "MENU: 1-Red 2-RemoteAdmin 3-Salir")
+# --- FUNCIÓN OPTIMIZADA: LANZAMIENTO DIRECTO ---
+launch_games() {
+    force_resolution
+    echo "Cargando EmulationStation..."
     
-    if [ -z "$raw_main" ]; then
-        clear
-        exit 0
+    # RUTA CONFIRMADA POR EL USUARIO (PRIORIDAD ABSOLUTA)
+    GAME_BIN="/usr/bin/emulationstation/emulationstation"
+    
+    if [ -f "$GAME_BIN" ]; then
+        "$GAME_BIN"
+    else
+        # Fallback de emergencia por si cambia en el futuro
+        echo "Ruta principal falló. Buscando alternativa..."
+        ALT_BIN=$(find /usr /opt -name "emulationstation" -type f -executable 2>/dev/null | head -n 1)
+        if [ -n "$ALT_BIN" ]; then
+            "$ALT_BIN"
+        else
+            echo "ERROR: No se encuentra EmulationStation."
+            read -r
+        fi
+    fi
+    
+    force_resolution
+}
+
+# --- BUCLE PRINCIPAL ---
+while true; do
+    raw=$(get_input "1-Red 2-Sis 3-Admin 4-Jugar 5-Fin")
+    
+    if [ -z "$raw" ]; then
+        run_terminal "neofetch"
+        continue
     fi
 
-    clean_main=$(echo "$raw_main" | sed 's/\x1b\[[0-9;]*[a-zA-Z]//g' | tr -cd '0-9')
-    final_main=${clean_main: -1}
+    sel=$(clean_input "$raw"); sel=${sel: -1}
 
-    case "$final_main" in
-        1) network_tools ;;
-        2) remote_admin ;;
-        3) clear; exit 0 ;;
-        *) show_result "Error. Escribe 1, 2 o 3." ;;
+    case "$sel" in
+        1) menu_network ;;
+        2) menu_system ;; 
+        3) menu_admin ;;
+        4) launch_games ;;
+        5) 
+           off=$(get_input "1-Apagar 2-Reiniciar")
+           c_off=$(clean_input "$off"); c_off=${c_off: -1}
+           if [ "$c_off" == "1" ]; then poweroff; fi
+           if [ "$c_off" == "2" ]; then reboot; fi
+           ;;
+        *) ;;
     esac
 done
