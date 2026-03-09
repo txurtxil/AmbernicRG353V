@@ -47,6 +47,10 @@ Protocolo de Reducción:
 Protocolo de Restauración y Auto-Expansión:
  * Para grabar: gunzip -c cyberdeck_x55_generico.tgz | sudo dd of=/dev/sdc bs=4M status=progress conv=fsync
  * Para que la partición STORAGE se expanda sola al 100% de la SD en el primer arranque, se inyecta el archivo trigger vacío: touch /storage/.please_resize_me (o en la partición BOOT, dependiendo del kernel compilado).
+Para clonar wn la memoria interna:
+gunzip -c /storage/imgX55.tgz | dd of=/dev/mmcblk0 bs=4M conv=fsync
+
+ * 
 🤖 PROMPT MAESTRO (Para iniciar un nuevo chat de IA)
 Copia y pega el siguiente bloque exacto en tu nueva sesión para que el asistente asuma el rol, conozca todo el hardware, el estado actual y retome el trabajo sin tener que explicarle nada.
 INICIO DEL PROMPT
@@ -62,3 +66,4 @@ Próximo Objetivo:
 Necesitamos levantar la pila de Bluetooth desde la terminal (ignorando herramientas gráficas) para emparejar y enviar datos a una impresora térmica portátil modelo "Datecs".
 Actúa con respuestas directas, técnicas, proporcionando comandos exactos por pasos. ¿Cuáles son los comandos y el protocolo a seguir para escanear y emparejar la impresora Datecs por Bluetooth desde nuestra terminal?
 FIN DEL PROMPT
+
