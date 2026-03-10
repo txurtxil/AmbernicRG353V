@@ -49,6 +49,17 @@ Protocolo de Restauración y Auto-Expansión:
  * Para que la partición STORAGE se expanda sola al 100% de la SD en el primer arranque, se inyecta el archivo trigger vacío: touch /storage/.please_resize_me (o en la partición BOOT, dependiendo del kernel compilado).
 Para clonar wn la memoria interna:
 gunzip -c /storage/imgX55.tgz | dd of=/dev/mmcblk0 bs=4M conv=fsync
+# 1. Aseguramos que la SD no esté montada
+sudo umount /dev/sdd* 2>/dev/null
+
+# 2. Obligamos a la tabla de particiones a estirar la partición 2 hasta el final de la SD
+sudo parted /dev/sdd resizepart 2 100%
+
+# 3. Revisamos el sistema de archivos para evitar corrupciones
+sudo e2fsck -f /dev/sdd2
+
+# 4. Expandimos el sistema ext4 para que ocupe todo ese nuevo espacio
+sudo resize2fs /dev/sdd2
 
  * 
 🤖 PROMPT MAESTRO (Para iniciar un nuevo chat de IA)
