@@ -1,5 +1,4 @@
-Aquí tienes el documento técnico estructurado como un README.md exhaustivo y el "Prompt de Contexto" maestro. Este informe documenta cada victoria, cada parche y cada comando exacto para que el proyecto sea 100% reproducible.
-📄 ARCHIVO: README.md (ROCKNIX CyberDeck Project)
+
 📡 RESUMEN DEL PROYECTO
 Proyecto: CyberDeck OS para PowKiddy X55 (Rockchip RK3566).
 Base del Sistema: ROCKNIX (Distribución Linux embebida orientada al gaming, reconvertida en herramienta de ciberseguridad/terminal).
