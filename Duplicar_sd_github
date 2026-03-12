@@ -1,0 +1,140 @@
+cat << 'EOF' > cyber_sentinel_total.sh
+#!/bin/bash
+
+# --- CONFIGURACIÓN TÁCTICA ---
+CHUNK_SIZE="500M" # Reducido para máxima estabilidad en subida
+mkdir -p /mnt/img_p2 /tmp/sentinel_download
+
+# --- FUNCIÓN: REDUCCIÓN INTERNA (SOPORTE ROCKNIX) ---
+pishrink_internal() {
+    local img="$1"
+    echo "[*] Iniciando reducción interna de la imagen..."
+    
+    # 1. Inyectar .please_resize_me (Basado en clonador_generico.sh)
+    LOOP_DEV=$(losetup -Pf --show "$img")
+    sleep 2
+    mount "${LOOP_DEV}p2" /mnt/img_p2
+    touch /mnt/img_p2/.please_resize_me
+    umount /mnt/img_p2
+    
+    # 2. Reducción de Filesystem (Basado en pishrink.sh)
+    e2fsck -pf "${LOOP_DEV}p2"
+    if ! minsize=$(resize2fs -P "${LOOP_DEV}p2" | cut -d ':' -f 2 | tr -d ' '); then
+        echo "[-] Error en resize2fs."; losetup -d "$LOOP_DEV"; return 1
+    fi
+    
+    minsize=$((minsize + 1000)) # Margen de seguridad
+    resize2fs -p "${LOOP_DEV}p2" $minsize
+    
+    # 3. Ajuste de Partición y Truncado
+    partstart=$(parted -ms "$img" unit B print | tail -n 1 | cut -d ':' -f 2 | tr -d 'B')
+    blocksize=$(tune2fs -l "${LOOP_DEV}p2" | grep '^Block size:' | tr -d ' ' | cut -d ':' -f 2)
+    partnewsize=$((minsize * blocksize))
+    newpartend=$((partstart + partnewsize))
+    
+    losetup -d "$LOOP_DEV"
+    partnum=$(parted -ms "$img" unit B print | tail -n 1 | cut -d ':' -f 1)
+    parted -s -a minimal "$img" rm "$partnum"
+    parted -s "$img" unit B mkpart primary "$partstart" "$newpartend"
+    
+    endresult=$(parted -ms "$img" unit B print free | tail -1 | cut -d ':' -f 2 | tr -d 'B')
+    truncate -s "$endresult" "$img"
+    echo "[+] Reducción completada."
+}
+
+# --- FUNCIÓN: DESCARGA Y GRABADO ---
+download_and_flash() {
+    echo "--- MÓDULO DE INFILTRACIÓN (GITHUB -> SD) ---"
+    read -p "[?] Repositorio (usuario/repo): " D_REPO
+    read -sp "[?] GitHub Token: " D_TOKEN
+    echo -e "\n[*] Consultando activos..."
+    
+    ASSETS=$(curl -s -H "Authorization: Bearer $D_TOKEN" "https://api.github.com/repos/$D_REPO/releases/latest" | jq -r '.assets[] | .name + "|" + .url')
+    [ -z "$ASSETS" ] && echo "[-] No hay archivos." && return
+    
+    echo "[*] Archivos en la nube:"
+    echo "$ASSETS" | cut -d '|' -f 1
+    read -p "[?] Prefijo del archivo (ej. Backup_Sentinel.7z): " PREFIX
+    
+    cd /tmp/sentinel_download || exit
+    rm -f ${PREFIX}*
+    
+    echo "$ASSETS" | grep "$PREFIX" | while IFS="|" read -r name url; do
+        echo "[>] Descargando $name..."
+        curl -# -L -H "Authorization: Bearer $D_TOKEN" -H "Accept: application/octet-stream" "$url" -o "$name"
+    done
+
+    FINAL_FILE="$PREFIX"
+    [ -f "${PREFIX}.001" ] && cat ${PREFIX}.* > "${PREFIX}_joined" && FINAL_FILE="${PREFIX}_joined"
+
+    lsblk -p -o NAME,SIZE,MODEL,TRAN | grep -E "usb|sata"
+    read -p "[?] Unidad SD destino (ej. /dev/sdc): " DEST_SD
+    read -sp "[?] Contraseña 7z: " SD_PASS
+    echo -e "\n[*] Grabando imagen directamente..."
+    7z x "$FINAL_FILE" -p"$SD_PASS" -so | sudo dd of="$DEST_SD" bs=4M status=progress conv=fsync
+    
+    echo "[+] Despliegue finalizado."
+    cd - > /dev/null
+}
+
+# --- FUNCIÓN: BACKUP Y SUBIDA REFORZADA ---
+backup_and_upload() {
+    echo "--- MÓDULO DE EXFILTRACIÓN REFORZADO (500MB) ---"
+    lsblk -p -o NAME,SIZE,MODEL,TRAN | grep -E "usb|sata"
+    read -p "[?] Unidad SD origen (ej. /dev/sdc): " SRC_SD
+    read -p "[?] Repositorio (usuario/repo): " REPO
+    read -sp "[?] GitHub Token: " TOKEN
+    echo -e "\n"
+    read -sp "[?] Contraseña 7z: " PASS
+    echo -e "\n"
+
+    TMP_IMG="cyberdeck_master.img"
+    echo "[*] Clonando SD..."
+    sudo dd if="$SRC_SD" of="$TMP_IMG" bs=4M status=progress conv=fsync
+    
+    pishrink_internal "$TMP_IMG"
+    
+    echo "[*] Cifrando en volúmenes de $CHUNK_SIZE..."
+    7z a -p"$PASS" -mhe=on -v$CHUNK_SIZE "Backup_Sentinel.7z" "$TMP_IMG"
+    
+    TAG="v$(date +%Y%m%d%H%M)"
+    REL=$(curl -s -X POST -H "Authorization: Bearer $TOKEN" -d "{\"tag_name\":\"$TAG\", \"name\":\"Backup $TAG\"}" "https://api.github.com/repos/$REPO/releases")
+    REL_ID=$(echo "$REL" | jq -r '.id')
+    
+    for f in Backup_Sentinel.7z.*; do
+        echo "[>] Subiendo $f (Resiliencia Activa)..."
+        curl -# -L -X POST \
+          -H "Authorization: Bearer $TOKEN" \
+          -H "Content-Type: application/octet-stream" \
+          --retry 5 --retry-delay 10 \
+          --low-speed-limit 1000 --low-speed-time 60 \
+          --upload-file "$f" \
+          "https://uploads.github.com/repos/$REPO/releases/$REL_ID/assets?name=$f"
+        
+        if [ $? -ne 0 ]; then echo "[-] Error crítico en subida."; break; fi
+    done
+    
+    rm -f "$TMP_IMG" Backup_Sentinel.7z.*
+    echo "[+] Backup exfiltrado con éxito."
+}
+
+# --- MENÚ ---
+while true; do
+    clear
+    echo "================================================="
+    echo "    CYBER-SENTINEL: GESTIÓN INTEGRAL (v6.0)      "
+    echo "================================================="
+    echo " 1) CREAR BACKUP Y SUBIR (Trozos 500MB)"
+    echo " 2) DESCARGAR Y GRABAR EN SD"
+    echo " 3) SALIR"
+    echo "================================================="
+    read -p "[?] Opción: " OPT
+    case $OPT in
+        1) backup_and_upload ;;
+        2) download_and_flash ;;
+        3) exit 0 ;;
+    esac
+done
+EOF
+chmod +x cyber_sentinel_total.sh
+
