@@ -95,8 +95,12 @@ backup_and_upload() {
     
     pishrink_internal "$TMP_IMG"
     
+    # PARCHE V7.3: Limpieza de residuos para evitar E_NOTIMPL de 7z
+    log "[*] Limpiando archivos temporales de sesiones anteriores..."
+    rm -f Backup_Sentinel.7z.*
+    
     log "[*] Cifrando en volúmenes de $CHUNK_SIZE..."
-    if ! 7z a -p"$PASS" -mhe=on -v$CHUNK_SIZE "Backup_Sentinel.7z" "$TMP_IMG"; then
+    if ! 7z a -p"$PASS" -mhe=on -v$CHUNK_SIZE -y "Backup_Sentinel.7z" "$TMP_IMG"; then
         log "[-] ERROR: Falló la compresión 7z."
         return
     fi
@@ -107,14 +111,12 @@ backup_and_upload() {
     REL_ID=$(echo "$REL" | jq -r '.id')
     
     if [ "$REL_ID" == "null" ] || [ -z "$REL_ID" ]; then
-        log "[-] ERROR: No se pudo crear la release. Verifica tu Token y permisos."
-        log "Respuesta de GitHub: $REL"
+        log "[-] ERROR: No se pudo crear la release. Verifica tu Token."
         return
     fi
     
     for f in Backup_Sentinel.7z.*; do
-        log "[>] Subiendo $f (Resiliencia Activa COMPATIBLE)..."
-        # Subida limpia, ocultando el JSON de GitHub y enviándolo al Log
+        log "[>] Subiendo $f (Resiliencia Activa)..."
         curl -# -L -X POST \
           -H "Authorization: Bearer $TOKEN" \
           -H "Content-Type: application/octet-stream" \
@@ -151,11 +153,11 @@ download_and_flash() {
     echo "[*] Archivos en la nube:"
     echo "$ASSETS" | cut -d '|' -f 1
     
-    # Escudo Anti-Vacíos: Obligamos a escribir el nombre
+    # Escudo Anti-Vacíos: Obligamos a escribir el prefijo correcto
     while true; do
         read -p "[?] Prefijo del archivo (ej. Backup_Sentinel.7z): " PREFIX
         if [ -n "$PREFIX" ]; then break; fi
-        echo "[-] ERROR: El prefijo no puede estar vacío. Escribe el nombre base."
+        echo "[-] ERROR: El prefijo no puede estar vacío."
     done
     
     cd /tmp/sentinel_download || exit
@@ -166,14 +168,14 @@ download_and_flash() {
         curl -# -L -H "Authorization: Bearer $D_TOKEN" -H "Accept: application/octet-stream" "$url" -o "$name"
     done
 
-    # Streaming Nativo: Buscamos el primer volumen (.001) para que 7z haga el resto
+    # Streaming Nativo: 7z se encarga de unir los volúmenes (.001, .002...)
     if [ -f "${PREFIX}.001" ]; then
         FINAL_FILE="${PREFIX}.001"
-        log "[*] Sistema multi-volumen detectado. 7-Zip procesará la cadena automáticamente."
+        log "[*] Sistema multi-volumen detectado. Streaming activado."
     elif [ -f "$PREFIX" ]; then
         FINAL_FILE="$PREFIX"
     else
-        log "[-] ERROR CRÍTICO: No se encontró el archivo $PREFIX tras la descarga."
+        log "[-] ERROR CRÍTICO: No se encontró el archivo descargado."
         return
     fi
 
@@ -193,7 +195,7 @@ download_and_flash() {
         return
     fi
     
-    log "[+] Despliegue finalizado con éxito. Ya puedes retirar la SD."
+    log "[+] Despliegue finalizado con éxito."
     cd - > /dev/null
 }
 
@@ -201,7 +203,7 @@ download_and_flash() {
 while true; do
     clear
     echo "================================================="
-    echo "    CYBER-SENTINEL: GESTIÓN INTEGRAL (v7.2)      "
+    echo "    CYBER-SENTINEL: GESTIÓN INTEGRAL (v7.3)      "
     echo "    * Modo Caja Negra: Logs Activados * "
     echo "================================================="
     echo " 1) CREAR BACKUP Y SUBIR (Trozos 500MB)"
