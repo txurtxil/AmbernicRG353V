@@ -1,32 +1,56 @@
-cat << 'EOF' > cyber_sentinel_total.sh
+cat << 'EOF' > cyber_sentinel_v7.sh
 #!/bin/bash
 
 # --- CONFIGURACIÓN TÁCTICA ---
-CHUNK_SIZE="500M" # Reducido para máxima estabilidad en subida
+CHUNK_SIZE="500M"
+LOG_FILE="$(pwd)/sentinel_operaciones.log"
 mkdir -p /mnt/img_p2 /tmp/sentinel_download
 
-# --- FUNCIÓN: REDUCCIÓN INTERNA (SOPORTE ROCKNIX) ---
+# --- SISTEMA DE LOGS ---
+log() {
+    echo -e "$1"
+    echo "$(date '+%Y-%m-%d %H:%M:%S') - $1" >> "$LOG_FILE"
+}
+
+pause() {
+    echo ""
+    read -p "[?] Presiona ENTER para volver al menú principal..."
+}
+
+check_dependencies() {
+    log "[*] Verificando dependencias del sistema..."
+    local deps=("7z" "curl" "jq" "parted" "losetup" "e2fsck" "resize2fs")
+    for tool in "${deps[@]}"; do
+        if ! command -v "$tool" >/dev/null 2>&1; then
+            log "[-] ERROR CRÍTICO: Falta la herramienta '$tool'. Instálala con: sudo apt install p7zip-full curl jq parted util-linux e2fsprogs"
+            return 1
+        fi
+    done
+    log "[+] Todas las dependencias están operativas."
+    return 0
+}
+
+# --- FUNCIÓN: REDUCCIÓN INTERNA ---
 pishrink_internal() {
     local img="$1"
-    echo "[*] Iniciando reducción interna de la imagen..."
+    log "[*] Iniciando reducción interna de la imagen..."
     
-    # 1. Inyectar .please_resize_me (Basado en clonador_generico.sh)
     LOOP_DEV=$(losetup -Pf --show "$img")
     sleep 2
     mount "${LOOP_DEV}p2" /mnt/img_p2
     touch /mnt/img_p2/.please_resize_me
     umount /mnt/img_p2
     
-    # 2. Reducción de Filesystem (Basado en pishrink.sh)
     e2fsck -pf "${LOOP_DEV}p2"
     if ! minsize=$(resize2fs -P "${LOOP_DEV}p2" | cut -d ':' -f 2 | tr -d ' '); then
-        echo "[-] Error en resize2fs."; losetup -d "$LOOP_DEV"; return 1
+        log "[-] Error en resize2fs."
+        losetup -d "$LOOP_DEV"
+        return 1
     fi
     
-    minsize=$((minsize + 1000)) # Margen de seguridad
+    minsize=$((minsize + 1000)) 
     resize2fs -p "${LOOP_DEV}p2" $minsize
     
-    # 3. Ajuste de Partición y Truncado
     partstart=$(parted -ms "$img" unit B print | tail -n 1 | cut -d ':' -f 2 | tr -d 'B')
     blocksize=$(tune2fs -l "${LOOP_DEV}p2" | grep '^Block size:' | tr -d ' ' | cut -d ':' -f 2)
     partnewsize=$((minsize * blocksize))
@@ -39,49 +63,23 @@ pishrink_internal() {
     
     endresult=$(parted -ms "$img" unit B print free | tail -1 | cut -d ':' -f 2 | tr -d 'B')
     truncate -s "$endresult" "$img"
-    echo "[+] Reducción completada."
+    log "[+] Reducción completada con éxito."
 }
 
-# --- FUNCIÓN: DESCARGA Y GRABADO ---
-download_and_flash() {
-    echo "--- MÓDULO DE INFILTRACIÓN (GITHUB -> SD) ---"
-    read -p "[?] Repositorio (usuario/repo): " D_REPO
-    read -sp "[?] GitHub Token: " D_TOKEN
-    echo -e "\n[*] Consultando activos..."
-    
-    ASSETS=$(curl -s -H "Authorization: Bearer $D_TOKEN" "https://api.github.com/repos/$D_REPO/releases/latest" | jq -r '.assets[] | .name + "|" + .url')
-    [ -z "$ASSETS" ] && echo "[-] No hay archivos." && return
-    
-    echo "[*] Archivos en la nube:"
-    echo "$ASSETS" | cut -d '|' -f 1
-    read -p "[?] Prefijo del archivo (ej. Backup_Sentinel.7z): " PREFIX
-    
-    cd /tmp/sentinel_download || exit
-    rm -f ${PREFIX}*
-    
-    echo "$ASSETS" | grep "$PREFIX" | while IFS="|" read -r name url; do
-        echo "[>] Descargando $name..."
-        curl -# -L -H "Authorization: Bearer $D_TOKEN" -H "Accept: application/octet-stream" "$url" -o "$name"
-    done
-
-    FINAL_FILE="$PREFIX"
-    [ -f "${PREFIX}.001" ] && cat ${PREFIX}.* > "${PREFIX}_joined" && FINAL_FILE="${PREFIX}_joined"
-
-    lsblk -p -o NAME,SIZE,MODEL,TRAN | grep -E "usb|sata"
-    read -p "[?] Unidad SD destino (ej. /dev/sdc): " DEST_SD
-    read -sp "[?] Contraseña 7z: " SD_PASS
-    echo -e "\n[*] Grabando imagen directamente..."
-    7z x "$FINAL_FILE" -p"$SD_PASS" -so | sudo dd of="$DEST_SD" bs=4M status=progress conv=fsync
-    
-    echo "[+] Despliegue finalizado."
-    cd - > /dev/null
-}
-
-# --- FUNCIÓN: BACKUP Y SUBIDA REFORZADA ---
+# --- FUNCIÓN: BACKUP Y SUBIDA ---
 backup_and_upload() {
-    echo "--- MÓDULO DE EXFILTRACIÓN REFORZADO (500MB) ---"
-    lsblk -p -o NAME,SIZE,MODEL,TRAN | grep -E "usb|sata"
+    log "\n--- MÓDULO DE EXFILTRACIÓN REFORZADO (500MB) ---"
+    
+    if ! check_dependencies; then return; fi
+
+    lsblk -p -o NAME,SIZE,MODEL,TRAN | grep -E "usb|sata" | grep -v "─"
     read -p "[?] Unidad SD origen (ej. /dev/sdc): " SRC_SD
+    
+    if [ ! -b "$SRC_SD" ]; then
+        log "[-] ERROR: La unidad $SRC_SD no existe."
+        return
+    fi
+
     read -p "[?] Repositorio (usuario/repo): " REPO
     read -sp "[?] GitHub Token: " TOKEN
     echo -e "\n"
@@ -89,52 +87,137 @@ backup_and_upload() {
     echo -e "\n"
 
     TMP_IMG="cyberdeck_master.img"
-    echo "[*] Clonando SD..."
-    sudo dd if="$SRC_SD" of="$TMP_IMG" bs=4M status=progress conv=fsync
+    log "[*] Clonando SD $SRC_SD a $TMP_IMG..."
+    if ! sudo dd if="$SRC_SD" of="$TMP_IMG" bs=4M status=progress conv=fsync; then
+        log "[-] ERROR: Falló el clonado con dd."
+        return
+    fi
     
     pishrink_internal "$TMP_IMG"
     
-    echo "[*] Cifrando en volúmenes de $CHUNK_SIZE..."
-    7z a -p"$PASS" -mhe=on -v$CHUNK_SIZE "Backup_Sentinel.7z" "$TMP_IMG"
+    log "[*] Cifrando en volúmenes de $CHUNK_SIZE..."
+    if ! 7z a -p"$PASS" -mhe=on -v$CHUNK_SIZE "Backup_Sentinel.7z" "$TMP_IMG"; then
+        log "[-] ERROR: Falló la compresión 7z."
+        return
+    fi
     
     TAG="v$(date +%Y%m%d%H%M)"
+    log "[*] Creando Release en GitHub: $TAG"
     REL=$(curl -s -X POST -H "Authorization: Bearer $TOKEN" -d "{\"tag_name\":\"$TAG\", \"name\":\"Backup $TAG\"}" "https://api.github.com/repos/$REPO/releases")
     REL_ID=$(echo "$REL" | jq -r '.id')
     
+    if [ "$REL_ID" == "null" ] || [ -z "$REL_ID" ]; then
+        log "[-] ERROR: No se pudo crear la release. Verifica tu Token y permisos."
+        log "Respuesta de GitHub: $REL"
+        return
+    fi
+    
     for f in Backup_Sentinel.7z.*; do
-        echo "[>] Subiendo $f (Resiliencia Activa)..."
+        log "[>] Subiendo $f (Resiliencia Activa COMPATIBLE)..."
+        # Subida limpia, ocultando el JSON de GitHub y enviándolo al Log
         curl -# -L -X POST \
           -H "Authorization: Bearer $TOKEN" \
           -H "Content-Type: application/octet-stream" \
           --retry 5 --retry-delay 10 \
-          --low-speed-limit 1000 --low-speed-time 60 \
           --upload-file "$f" \
-          "https://uploads.github.com/repos/$REPO/releases/$REL_ID/assets?name=$f"
+          "https://uploads.github.com/repos/$REPO/releases/$REL_ID/assets?name=$f" >> "$LOG_FILE" 2>&1
         
-        if [ $? -ne 0 ]; then echo "[-] Error crítico en subida."; break; fi
+        if [ $? -ne 0 ]; then 
+            log "[-] ERROR CRÍTICO: Falló la subida de $f."
+            return
+        fi
     done
     
     rm -f "$TMP_IMG" Backup_Sentinel.7z.*
-    echo "[+] Backup exfiltrado con éxito."
+    log "[+] Misión Cumplida: Backup exfiltrado con éxito."
 }
 
-# --- MENÚ ---
+# --- FUNCIÓN: DESCARGA Y GRABADO ---
+download_and_flash() {
+    log "\n--- MÓDULO DE INFILTRACIÓN (GITHUB -> SD) ---"
+    
+    if ! check_dependencies; then return; fi
+
+    read -p "[?] Repositorio (usuario/repo): " D_REPO
+    read -sp "[?] GitHub Token: " D_TOKEN
+    echo -e "\n[*] Consultando activos en GitHub..."
+    
+    ASSETS=$(curl -s -H "Authorization: Bearer $D_TOKEN" "https://api.github.com/repos/$D_REPO/releases/latest" | jq -r '.assets[] | .name + "|" + .url')
+    if [ -z "$ASSETS" ] || [ "$ASSETS" == "null|" ]; then 
+        log "[-] No se encontraron archivos en la última release."
+        return
+    fi
+    
+    echo "[*] Archivos en la nube:"
+    echo "$ASSETS" | cut -d '|' -f 1
+    
+    # Escudo Anti-Vacíos: Obligamos a escribir el nombre
+    while true; do
+        read -p "[?] Prefijo del archivo (ej. Backup_Sentinel.7z): " PREFIX
+        if [ -n "$PREFIX" ]; then break; fi
+        echo "[-] ERROR: El prefijo no puede estar vacío. Escribe el nombre base."
+    done
+    
+    cd /tmp/sentinel_download || exit
+    rm -f ${PREFIX}*
+    
+    echo "$ASSETS" | grep "$PREFIX" | while IFS="|" read -r name url; do
+        log "[>] Descargando $name..."
+        curl -# -L -H "Authorization: Bearer $D_TOKEN" -H "Accept: application/octet-stream" "$url" -o "$name"
+    done
+
+    # Streaming Nativo: Buscamos el primer volumen (.001) para que 7z haga el resto
+    if [ -f "${PREFIX}.001" ]; then
+        FINAL_FILE="${PREFIX}.001"
+        log "[*] Sistema multi-volumen detectado. 7-Zip procesará la cadena automáticamente."
+    elif [ -f "$PREFIX" ]; then
+        FINAL_FILE="$PREFIX"
+    else
+        log "[-] ERROR CRÍTICO: No se encontró el archivo $PREFIX tras la descarga."
+        return
+    fi
+
+    lsblk -p -o NAME,SIZE,MODEL,TRAN | grep -E "usb|sata" | grep -v "─"
+    read -p "[?] Unidad SD destino (ej. /dev/sdc): " DEST_SD
+    
+    if [ ! -b "$DEST_SD" ]; then
+        log "[-] ERROR: La unidad $DEST_SD no existe."
+        return
+    fi
+
+    read -sp "[?] Contraseña 7z: " SD_PASS
+    echo -e "\n[*] Grabando imagen directamente en la SD..."
+    
+    if ! 7z x "$FINAL_FILE" -p"$SD_PASS" -so | sudo dd of="$DEST_SD" bs=4M status=progress conv=fsync; then
+        log "[-] ERROR: Falló el grabado en la SD."
+        return
+    fi
+    
+    log "[+] Despliegue finalizado con éxito. Ya puedes retirar la SD."
+    cd - > /dev/null
+}
+
+# --- MENÚ PRINCIPAL ---
 while true; do
     clear
     echo "================================================="
-    echo "    CYBER-SENTINEL: GESTIÓN INTEGRAL (v6.0)      "
+    echo "    CYBER-SENTINEL: GESTIÓN INTEGRAL (v7.2)      "
+    echo "    * Modo Caja Negra: Logs Activados * "
     echo "================================================="
     echo " 1) CREAR BACKUP Y SUBIR (Trozos 500MB)"
     echo " 2) DESCARGAR Y GRABAR EN SD"
-    echo " 3) SALIR"
+    echo " 3) VER LOG DE OPERACIONES"
+    echo " 4) SALIR"
     echo "================================================="
     read -p "[?] Opción: " OPT
     case $OPT in
-        1) backup_and_upload ;;
-        2) download_and_flash ;;
-        3) exit 0 ;;
+        1) backup_and_upload; pause ;;
+        2) download_and_flash; pause ;;
+        3) less "$LOG_FILE"; pause ;;
+        4) echo "Saliendo..."; exit 0 ;;
+        *) echo "Opción no válida."; sleep 1 ;;
     esac
 done
 EOF
-chmod +x cyber_sentinel_total.sh
 
+chmod +x cyber_sentinel_v7.sh
